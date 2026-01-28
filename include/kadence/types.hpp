@@ -8,9 +8,9 @@
 namespace kadence {
 
 struct FrameSample {
-    std::uint64_t timestamp_ns = 0;
-    float frame_time_ms = 0;
-    bool dropped = false;
+    std::uint64_t timestamp_ns;
+    float frame_time_ms;
+    bool dropped;
 };
 
 struct SessionStats {
@@ -20,7 +20,6 @@ struct SessionStats {
     double avg_fps = 0.0;
     double p1_low_fps = 0.0;
     double p01_low_fps = 0.0;
-
     std::uint32_t dropped_last_sec = 0;
 };
 

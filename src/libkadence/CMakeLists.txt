@@ -1,7 +1,5 @@
 add_library(kadence_core STATIC
     kadence_core.cpp
-    time_utils.cpp
-    session_analyzer.cpp
 )
 
 target_include_directories(kadence_core
