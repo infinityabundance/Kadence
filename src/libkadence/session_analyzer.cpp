@@ -7,28 +7,19 @@
 
 namespace kadence {
 
-void SessionAnalyzer::add_sample(Session& session, const FrameSample& sample)
-{
-    // Append new sample
+void SessionAnalyzer::add_sample(Session& session, const FrameSample& sample) {
     session.recent_samples.push_back(sample);
-
-    // Trim to sliding window capacity
     trim_recent_samples(session);
 
-    // Initialize start timestamp on first sample
     if (session.stats.start_timestamp_ns == 0) {
         session.stats.start_timestamp_ns = sample.timestamp_ns;
     }
-
-    // Always update end timestamp
     session.stats.end_timestamp_ns = sample.timestamp_ns;
 
-    // Recompute stats based on recent samples
     recompute_stats(session);
 }
 
-void SessionAnalyzer::trim_recent_samples(Session& session)
-{
+void SessionAnalyzer::trim_recent_samples(Session& session) {
     if (session.recent_samples.size() <= RECENT_SAMPLE_CAPACITY) {
         return;
     }
@@ -38,80 +29,48 @@ void SessionAnalyzer::trim_recent_samples(Session& session)
                                  session.recent_samples.begin() + static_cast<std::ptrdiff_t>(excess));
 }
 
-void SessionAnalyzer::recompute_stats(Session& session)
-{
-    auto& samples = session.recent_samples;
-    auto& stats   = session.stats;
-
-    if (samples.empty()) {
-        stats.avg_fps       = 0.0;
-        stats.p1_low_fps    = 0.0;
-        stats.p01_low_fps   = 0.0;
-        stats.dropped_last_sec = 0;
+void SessionAnalyzer::recompute_stats(Session& session) {
+    if (session.recent_samples.empty()) {
+        session.stats.avg_fps = 0.0;
+        session.stats.p1_low_fps = 0.0;
+        session.stats.p01_low_fps = 0.0;
+        session.stats.dropped_last_sec = 0;
         return;
     }
 
-    // ---- Average FPS ----
-    double sum_ms = std::accumulate(
-        samples.begin(), samples.end(), 0.0,
-        [](double acc, const FrameSample& s) {
-            return acc + static_cast<double>(s.frame_time_ms);
-        });
-
-    const std::size_t count = samples.size();
-    const double avg_ms = (count > 0) ? (sum_ms / static_cast<double>(count)) : 0.0;
-
-    if (avg_ms > 0.0) {
-        stats.avg_fps = 1000.0 / avg_ms;
-    } else {
-        stats.avg_fps = 0.0;
+    std::vector<float> frame_times;
+    frame_times.reserve(session.recent_samples.size());
+    for (const auto& sample : session.recent_samples) {
+        frame_times.push_back(sample.frame_time_ms);
     }
 
-    // ---- 1% and 0.1% low FPS ----
-    std::vector<float> frame_times_ms;
-    frame_times_ms.reserve(samples.size());
-    for (const auto& s : samples) {
-        frame_times_ms.push_back(s.frame_time_ms);
-    }
+    const double sum_frame_time = std::accumulate(frame_times.begin(), frame_times.end(), 0.0);
+    const double avg_frame_time = sum_frame_time / static_cast<double>(frame_times.size());
+    session.stats.avg_fps = avg_frame_time > 0.0 ? 1000.0 / avg_frame_time : 0.0;
 
-    // Sort descending: largest frame times (worst) first
-    std::sort(frame_times_ms.begin(), frame_times_ms.end(), std::greater<float>());
+    std::sort(frame_times.begin(), frame_times.end());
+    const auto count = frame_times.size();
+    const std::size_t idx_p1 = std::min(count - 1, static_cast<std::size_t>(count * 0.99));
+    const std::size_t idx_p01 = std::min(count - 1, static_cast<std::size_t>(count * 0.999));
 
-    const std::size_t n = frame_times_ms.size();
+    const double p1_frame_time = frame_times[idx_p1];
+    const double p01_frame_time = frame_times[idx_p01];
 
-    auto fps_from_ms = [](float ms) -> double {
-        return (ms > 0.0f) ? (1000.0 / static_cast<double>(ms)) : 0.0;
-    };
+    session.stats.p1_low_fps = p1_frame_time > 0.0 ? 1000.0 / p1_frame_time : 0.0;
+    session.stats.p01_low_fps = p01_frame_time > 0.0 ? 1000.0 / p01_frame_time : 0.0;
 
-    // 1% low (worst 1% of frames)
-    std::size_t idx_1 = 0;
-    if (n > 1) {
-        idx_1 = std::min<std::size_t>(n - 1, static_cast<std::size_t>(n * 0.01));
-    }
-    stats.p1_low_fps = fps_from_ms(frame_times_ms[idx_1]);
-
-    // 0.1% low (worst 0.1% of frames)
-    std::size_t idx_01 = 0;
-    if (n > 1) {
-        idx_01 = std::min<std::size_t>(n - 1, static_cast<std::size_t>(n * 0.001));
-    }
-    stats.p01_low_fps = fps_from_ms(frame_times_ms[idx_01]);
-
-    // ---- Dropped frames in last second ----
-    const std::uint64_t end_ns = stats.end_timestamp_ns;
-    const std::uint64_t window_start =
-        (end_ns > ONE_SECOND_NS) ? (end_ns - ONE_SECOND_NS) : 0;
+    const std::uint64_t window_start = session.stats.end_timestamp_ns >= ONE_SECOND_NS
+        ? session.stats.end_timestamp_ns - ONE_SECOND_NS
+        : 0;
 
     std::uint32_t dropped_last_sec = 0;
-    for (const auto& s : samples) {
-        if (s.timestamp_ns >= window_start &&
-            s.frame_time_ms >= DROPPED_FRAME_THRESHOLD_MS)
-        {
+    for (const auto& sample : session.recent_samples) {
+        if (sample.timestamp_ns >= window_start && sample.frame_time_ms >= DROPPED_FRAME_THRESHOLD_MS) {
             ++dropped_last_sec;
         }
     }
 
-    stats.dropped_last_sec = dropped_last_sec;
+    session.stats.dropped_last_sec = dropped_last_sec;
 }
 
 } // namespace kadence
